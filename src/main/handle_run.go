@@ -4,13 +4,15 @@ import (
     "encoding/json"
     "errors"
     "fmt"
+    "io"
     "log"
     "net/http"
     "os/exec"
-    "io"
+    "strings"
 
     "github.com/gorilla/websocket"
     "github.com/practicode-org/runner/src/api"
+    "github.com/practicode-org/runner/src/rules"
 )
 
 var wsUpgrader = websocket.Upgrader{}
@@ -21,37 +23,24 @@ const (
     GenericError = iota + 1
     WebsocketError
     SourceCodeError
-    CompilerError
     MarshalError
-    UserProgramError
 )
 
-var (
-    errorNoSourceCode = errors.New("no source code provided")
-)
-
-type errorWebsocket struct {
-    err error
-}
-
-func (e errorWebsocket) Error() string {
-    return fmt.Sprintf("websocket error, %v", e.err)
-}
 
 func readSourceCode(conn *websocket.Conn) (string, error) {
 	_, data, err := conn.ReadMessage()
     if err != nil {
-        return "", errorWebsocket{err: err}
+        return "", fmt.Errorf("failed to read from websocket: %w", err)
     }
 
     msg := api.ClientMessage{}
     err = json.Unmarshal(data, &msg)
     if err != nil {
-        return "", fmt.Errorf("Failed to unmarshal message: %w, text: %s", err, data[:64])
+        return "", fmt.Errorf("failed to unmarshal message: %w, text: '%s'", err, data[:64])
     }
 
     if msg.SourceCode == nil {
-        return "", errorNoSourceCode
+        return "", errors.New("no source code")
     }
 
     return msg.SourceCode.Text, nil
@@ -64,6 +53,7 @@ func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<
             break
         }
 
+        // error messages also go to stdout
         if errMsg, ok := event.(api.Error); ok {
             fmt.Println("Error:", errMsg.Desc)
         }
@@ -86,7 +76,74 @@ func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<
     exitch<- struct{}{}
 }
 
-func handleRun(w http.ResponseWriter, r *http.Request) {
+func runCommand(sendMessages chan interface{}, stage string, command string, stdin string) {
+    log.Printf("Running stage '%s' command: %s\n", stage, command)
+
+    args := strings.Split(command, " ")
+
+    proc := exec.Command(args[0], args[1:]...)
+
+    stdinWriter, err := proc.StdinPipe()
+    if err != nil {
+        sendMessages<- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to attach to stdin pipe: %v", err), Stage: stage}
+        return
+    }
+    stdoutPipe, err := proc.StdoutPipe()
+    if err != nil {
+        sendMessages<- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stdout pipe: %v", err), Stage: stage}
+        return
+    }
+    stderrPipe, err := proc.StderrPipe()
+    if err != nil {
+        sendMessages<- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stderr pipe: %v", err), Stage: stage}
+        return
+    }
+
+    pipeTransfer := func(type_ string, readFrom io.Reader) {
+        for {
+            buf := make([]byte, 64)
+            n, err := readFrom.Read(buf)
+            if err != nil && err != io.EOF {
+                sendMessages<- api.Error{Code: GenericError, Desc: fmt.Sprintf("Error while reading stdout: %v", err), Stage: stage}
+                break
+            }
+            if n == 0 && err == io.EOF {
+                break
+            }
+            sendMessages<- api.Output{Text: string(buf[:n]), Type: type_, Stage: stage}
+        }
+    }
+
+    go pipeTransfer("stdout", stdoutPipe)
+    go pipeTransfer("stderr", stderrPipe)
+
+    err = proc.Start()
+    if err != nil {
+        sendMessages<- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to run program process: %v", err), Stage: stage}
+        return
+    }
+
+    sendMessages <- api.Event{Event: "started", Stage: stage}
+
+    if stdin != "" {
+        stdinWriter.Write([]byte(stdin))
+    }
+    stdinWriter.Close()
+
+    procState, err := proc.Process.Wait()
+    if err != nil {
+        sendMessages<- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to wait program process: %v", err), Stage: stage}
+        return
+    }
+
+    exitCode := procState.ExitCode()
+    log.Printf("Process exit code: %d\n", exitCode)
+
+    sendMessages <- api.Event{Event: "completed", Stage: stage}
+    sendMessages <- api.ExitCode{ExitCode: exitCode, Stage: stage}
+}
+
+func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
     log.Println("Got a request")
 
     c, err := wsUpgrader.Upgrade(w, r, nil)
@@ -96,7 +153,7 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
     }
     defer c.Close()
 
-    //
+    // preparation
     sendMessages := make(chan interface{}, 256)
     msgLoopExited := make(chan struct{})
 
@@ -111,97 +168,22 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 
     go messageSendLoop(c, sendMessages, msgLoopExited)
 
-    // Read source code
+    // read source code
     sourceText, err := readSourceCode(c)
     if err != nil {
-        sendMessages<- api.Error{Code: SourceCodeError, Desc: "Failed to read source code"}
+        sendMessages<- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "read_source"}
         return
     }
 
-    // Compilation phase
-    outputPath := "/tmp/a.out"
-    args := []string{"-o", outputPath,"-x", "c++", "-"}
-    command := "/usr/bin/g++"
+    // run stages
+    for i := 0; i < len(rules.Stages); i++ {
+        stage := rules.Stages[i]
 
-    log.Println("Running a compiler")
-    proc := exec.Command(command, args...)
-
-    stdin, err := proc.StdinPipe()
-    if err != nil {
-        sendMessages<- api.Error{Code: CompilerError, Desc: fmt.Sprintf("Failed to attach to stdin pipe: %v", err)}
-        return
-    }
-
-    stdin.Write([]byte(sourceText))
-    stdin.Close()
-
-    sendMessages <- api.Event{"started:compilation"}
-
-    output, err := proc.CombinedOutput()
-
-    sendMessages <- api.Event{"completed:compilation"}
-    if len(output) != 0 {
-        sendMessages <- api.Output{string(output)}
-    }
-    sendMessages <- api.Event{"compilation_exit:" + fmt.Sprintf("%d", proc.ProcessState.ExitCode())}
-
-    if err != nil {
-        sendMessages<- api.Error{Code: CompilerError, Desc: fmt.Sprintf("Failed to run compiler process: %v", err)}
-        return
-    }
-
-    // Run the program
-    log.Println("Running a program")
-    command = outputPath
-    proc = exec.Command(command)
-
-    stdoutPipe, err := proc.StdoutPipe()
-    if err != nil {
-        sendMessages<- api.Error{Code: UserProgramError, Desc: fmt.Sprintf("Failed to get program's stdout pipe: %v", err)}
-        return
-    }
-    stderrPipe, err := proc.StderrPipe()
-    if err != nil {
-        sendMessages<- api.Error{Code: UserProgramError, Desc: fmt.Sprintf("Failed to get program's stderr pipe: %v", err)}
-        return
-    }
-
-    pipeTransfer := func(sendMessages chan<- interface{}, readFrom io.Reader) {
-        for {
-            buf := make([]byte, 64)
-            n, err := readFrom.Read(buf)
-            if err != nil && err != io.EOF {
-                sendMessages<- api.Error{Code: UserProgramError, Desc: fmt.Sprintf("Error while reading stdout: %v", err)}
-                break
-            }
-            if n == 0 && err == io.EOF {
-                break
-            }
-            sendMessages<- api.Output{string(buf[:n])}
+        stdin := stage.Stdin
+        if stdin == "{source-code}" {
+            stdin = sourceText
         }
-        // TODO: wait until goroutine finishes?
+
+        runCommand(sendMessages, stage.Name, stage.Command, stdin)
     }
-
-    go pipeTransfer(sendMessages, stdoutPipe)
-    go pipeTransfer(sendMessages, stderrPipe)
-
-    err = proc.Start()
-    if err != nil {
-        sendMessages<- api.Error{Code: UserProgramError, Desc: fmt.Sprintf("Failed to run program process: %v", err)}
-        return
-    }
-
-    sendMessages <- api.Event{"started:user_program"}
-
-    procState, err := proc.Process.Wait()
-    if err != nil {
-        sendMessages<- api.Error{Code: UserProgramError, Desc: fmt.Sprintf("Failed to wait program process: %v", err)}
-        return
-    }
-
-    exitCode := procState.ExitCode()
-    log.Printf("User program done, exit code: %d\n", exitCode)
-
-    sendMessages <- api.Event{"completed:user_program"}
-    sendMessages <- api.Event{"user_program_exit:" + fmt.Sprintf("%d", exitCode)}
 }
