@@ -1,0 +1,12 @@
+#include <iostream>
+#include <thread>
+#include <chrono>
+
+int main() {
+    for (int i = 0; i < 3; i++) {
+        std::cerr << i + 1 << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    }
+    std::cout << "Hello\", world!" << std::endl;
+    return 1;
+}
