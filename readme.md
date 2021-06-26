@@ -7,7 +7,7 @@ Its responsibilities:
 - checks authentication token
 - upgrades connection to Websocket
 - does not allow parallel requests (one user can compile one program at a time)
-- controls maximum request rate
+- controls request rate limit
 
 - checks against limitations: size in bytes
 - searches for forbidden symbols
