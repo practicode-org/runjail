@@ -25,7 +25,7 @@ type Duration struct {
 }
 
 type Output struct {
-    Text string `json:"output"`
+    Text string `json:"output"` // base64 encoded
     Type string `json:"type"`
     Stage string `json:"stage"`
 }

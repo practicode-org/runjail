@@ -1,6 +1,7 @@
 package main
 
 import (
+    "encoding/base64"
     "encoding/json"
     "errors"
     "fmt"
@@ -47,7 +48,12 @@ func readSourceCode(conn *websocket.Conn) (string, error) {
         return "", errors.New("no source code")
     }
 
-    return msg.SourceCode.Text, nil
+    decodedSources, err := base64.StdEncoding.DecodeString(msg.SourceCode.Text)
+    if err != nil {
+        return "", fmt.Errorf("failed to decode base64: %w", err)
+    }
+
+    return string(decodedSources), nil
 }
 
 func putSourceCode(sourceCode string, sourcesDir string) error {
@@ -140,7 +146,9 @@ func runCommand(sendMessages chan interface{}, stage string, command string, lim
             if n == 0 && err == io.EOF {
                 break
             }
-            sendMessages<- api.Output{Text: string(buf[:n]), Type: type_, Stage: stage}
+
+            encodedStr := base64.StdEncoding.EncodeToString(buf[:n])
+            sendMessages<- api.Output{Text: encodedStr, Type: type_, Stage: stage}
         }
     }
 

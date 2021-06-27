@@ -1,6 +1,7 @@
 package main
 
 import (
+    "encoding/base64"
     "encoding/json"
     "flag"
     "fmt"
@@ -35,7 +36,9 @@ func main() {
 		log.Fatal("Failed to open source code file:", err)
 	}
 
-    msg := ClientMessage{SourceCode: &SourceCode{Text: string(text)}}
+    encodedText := base64.StdEncoding.EncodeToString(text)
+
+    msg := ClientMessage{SourceCode: &SourceCode{Text: encodedText}}
     jtext, err := json.Marshal(msg)
 	if err != nil {
 		log.Fatal("Failed to json marshal:", err)
@@ -57,6 +60,23 @@ func main() {
 				return
 			}
             fmt.Println("Message:", string(message))
+
+            msg := struct {
+                Output string `json:"output"`
+            }{}
+            err = json.Unmarshal(message, &msg)
+			if err != nil {
+				log.Println("Failed to Unmarshal JSON message:", err)
+			}
+
+            if msg.Output != "" {
+                outputDecoded, err := base64.StdEncoding.DecodeString(msg.Output)
+                if err != nil {
+                    log.Println("Failed to Decode base64:", err)
+                    continue
+                }
+                log.Println("Output:", string(outputDecoded))
+            }
 		}
 	}()
 
