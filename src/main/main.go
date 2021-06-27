@@ -2,9 +2,9 @@ package main
 
 import (
     "flag"
-    "log"
     "net/http"
-    "os"
+
+    log "github.com/sirupsen/logrus"
 
     "github.com/practicode-org/runner/src/rules"
 )
@@ -20,8 +20,7 @@ func main() {
 
     rules, err := rules.LoadRules(*rulesFile)
     if err != nil {
-        log.Printf("Error: %v", err)
-        os.Exit(1)
+        log.Fatalf("Error: %v", err)
     }
 
     http.HandleFunc("/health", handleHealth)
@@ -30,6 +29,9 @@ func main() {
     })
 
     PORT := ":1556"
-    log.Println("Starting serving at", PORT)
-    http.ListenAndServe("0.0.0.0" + PORT, nil)
+    log.Infof("Starting serving at %s", PORT)
+    err = http.ListenAndServe("0.0.0.0" + PORT, nil)
+    if err != nil {
+        log.Fatalf("Failed to server: %v", err)
+    }
 }

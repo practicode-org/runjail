@@ -4,10 +4,10 @@ import (
     "encoding/json"
     "fmt"
     "io/ioutil"
-    "log"
     "os"
     "path/filepath"
 
+    log "github.com/sirupsen/logrus"
     "gopkg.in/yaml.v2"
 )
 
@@ -53,9 +53,9 @@ func (r *Rules) Check() error {
     if r.SourcesSizeLimitBytes == 0 {
         return fmt.Errorf("SourcesSizeLimitBytes can't be zero")
     } else if r.SourcesSizeLimitBytes < 1024 {
-        log.Printf("SourcesSizeLimitBytes %d seems very low\n", r.SourcesSizeLimitBytes)
+        log.Warningf("SourcesSizeLimitBytes %d seems very low\n", r.SourcesSizeLimitBytes)
     } else if r.SourcesSizeLimitBytes > 1024 * 1024 * 10 {
-        log.Printf("SourcesSizeLimitBytes %d seems too high\n", r.SourcesSizeLimitBytes)
+        log.Warningf("SourcesSizeLimitBytes %d seems too high\n", r.SourcesSizeLimitBytes)
     }
 
     // check every stage
@@ -75,41 +75,41 @@ func (r *Rules) Check() error {
         if limits.AddressSpace == 0 {
             return fmt.Errorf("Limit.AddressSpace can't be zero")
         } else if limits.AddressSpace < 64 {
-            log.Printf("AddressSpace %d mb seems very low\n", limits.AddressSpace)
+            log.Warningf("AddressSpace %d mb seems very low\n", limits.AddressSpace)
         } else if limits.AddressSpace > 512 {
-            log.Printf("AddressSpace %d mb seems too high\n", limits.AddressSpace)
+            log.Warningf("AddressSpace %d mb seems too high\n", limits.AddressSpace)
         }
 
         if limits.RunTime == 0.0 {
             return fmt.Errorf("Limit.RunTime can't be zero")
         } else if limits.RunTime < 0.5 {
-            log.Printf("RunTime %.1f sec seems very low\n", limits.RunTime)
+            log.Warningf("RunTime %.1f sec seems very low\n", limits.RunTime)
         } else if limits.RunTime > 60.0 {
-            log.Printf("RunTime %.1f sec seems too high\n", limits.RunTime)
+            log.Warningf("RunTime %.1f sec seems too high\n", limits.RunTime)
         }
 
         if limits.FileDescriptors == 0 {
             return fmt.Errorf("Limit.FileDescriptors can't be zero")
         } else if limits.FileDescriptors < 3 {
-            log.Printf("FileDescriptors %d seems very low\n", limits.FileDescriptors)
+            log.Warningf("FileDescriptors %d seems very low\n", limits.FileDescriptors)
         } else if limits.FileDescriptors > 512 {
-            log.Printf("FileDescriptors %d seems too high\n", limits.FileDescriptors)
+            log.Warningf("FileDescriptors %d seems too high\n", limits.FileDescriptors)
         }
 
         if limits.FileWrites == 0 {
             return fmt.Errorf("Limit.FileWrites can't be zero")
         } else if limits.FileWrites < 1 {
-            log.Printf("FileWrites %d mb seems very low\n", limits.FileWrites)
+            log.Warningf("FileWrites %d mb seems very low\n", limits.FileWrites)
         } else if limits.FileWrites > 100 {
-            log.Printf("FileWrites %d mb seems too high\n", limits.FileWrites)
+            log.Warningf("FileWrites %d mb seems too high\n", limits.FileWrites)
         }
 
         if limits.Threads == 0 {
             return fmt.Errorf("Limit.Threads can't be zero")
         } else if limits.Threads < 64 {
-            log.Printf("Threads %d seems very low\n", limits.Threads)
+            log.Warningf("Threads %d seems very low\n", limits.Threads)
         } else if limits.Threads > 2000 {
-            log.Printf("Threads %d seems too high\n", limits.Threads)
+            log.Warningf("Threads %d seems too high\n", limits.Threads)
         }
     }
 

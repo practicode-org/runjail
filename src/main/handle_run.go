@@ -7,7 +7,6 @@ import (
     "fmt"
     "io"
     "io/ioutil"
-    "log"
     "net/http"
     "os/exec"
     "path/filepath"
@@ -15,6 +14,8 @@ import (
     "time"
 
     "github.com/gorilla/websocket"
+    log "github.com/sirupsen/logrus"
+
     "github.com/practicode-org/runner/src/api"
     "github.com/practicode-org/runner/src/rules"
 )
@@ -25,9 +26,7 @@ type CloseEvent struct {}
 
 const (
     GenericError = iota + 1
-    WebsocketError
     SourceCodeError
-    MarshalError
 )
 
 //
@@ -81,7 +80,7 @@ func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<
 
         // error messages also go to stdout
         if errMsg, ok := event.(api.Error); ok {
-            fmt.Println("Error:", errMsg.Desc)
+            log.Error("Error:", errMsg.Desc)
         }
 
         bytes, err := json.Marshal(&event)
@@ -94,7 +93,7 @@ func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<
 
         err = conn.WriteMessage(websocket.TextMessage, bytes)
         if err != nil {
-            fmt.Printf("Failed to write to websocket: %v\n", err)
+            log.Errorf("Failer to write to websocket: %v\n", err)
             continue
         }
     }
@@ -120,7 +119,7 @@ func runCommand(sendMessages chan interface{}, stage string, command string, lim
 
     jailedCommand, jailedArgs := wrapToJail(command, limits, sourcesDir)
 
-    log.Printf("Running stage '%s' command: %s\n", stage, jailedCommand)
+    log.Infof("Running stage '%s' command: %s\n", stage, jailedCommand)
 
     proc := exec.Command(jailedArgs[0], jailedArgs[1:]...)
 
@@ -173,7 +172,7 @@ func runCommand(sendMessages chan interface{}, stage string, command string, lim
     exitCode := procState.ExitCode()
     duration := time.Since(startTime)
 
-    log.Printf("Process exit code: %d, stage duration: %.2f sec\n", exitCode, duration.Seconds())
+    log.Infof("Process exit code: %d, stage duration: %.2f sec\n", exitCode, duration.Seconds())
 
     sendMessages <- api.ExitCode{ExitCode: exitCode, Stage: stage}
     sendMessages <- api.Duration{DurationSec: duration.Seconds(), Stage: stage}
@@ -183,11 +182,11 @@ func runCommand(sendMessages chan interface{}, stage string, command string, lim
 }
 
 func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
-    log.Println("Got a request")
+    log.Debugf("Got a request")
 
     c, err := wsUpgrader.Upgrade(w, r, nil)
     if err != nil {
-        fmt.Printf("Failed to upgrade to Websocket: %v\n", err)
+        log.Errorf("Failed to upgrade to Websocket: %v\n", err)
         return
     }
     defer c.Close()
@@ -201,7 +200,7 @@ func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
         <-msgLoopExited
         c.Close()
         close(sendMessages)
-        log.Println("Done")
+        log.Debugf("Done")
     }()
 
     go messageSendLoop(c, sendMessages, msgLoopExited)
