@@ -1,9 +1,9 @@
 {
-    "sources_dir": "/tmp/sources2",
-    "sources_size_limit_bytes": 600,
+    "sources_dir": "/tmp/sources",
+    "sources_size_limit_bytes": 6000,
     "stages": [
         {
-            "name": "compilation",
+            "name": "compile",
             "command": "/usr/bin/clang++ -x c++ -o /tmp/out/prog {sources}",
             "limits": {
                 "address_space_mb": 400,
@@ -17,7 +17,7 @@
             "name": "run",
             "command":"/tmp/out/prog",
             "limits": {
-                "address_space_mb": 50,
+                "address_space_mb": 5,
                 "run_time_sec": 8.0,
                 "file_descriptors": 32,
                 "file_writes_mb": 16,
