@@ -11,6 +11,7 @@ import (
     "os/exec"
     "path/filepath"
     "strings"
+    "time"
 
     "github.com/gorilla/websocket"
     "github.com/practicode-org/runner/src/api"
@@ -91,7 +92,6 @@ func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<
             continue
         }
     }
-    log.Println("Quit from messageSendLoop")
     exitch<- struct{}{}
 }
 
@@ -110,6 +110,8 @@ func wrapToJail(command string, limits *rules.Limits, sourcesDir string) (string
 }
 
 func runCommand(sendMessages chan interface{}, stage string, command string, limits *rules.Limits, sourcesDir string) bool {
+    startTime := time.Now()
+
     jailedCommand, jailedArgs := wrapToJail(command, limits, sourcesDir)
 
     log.Printf("Running stage '%s' command: %s\n", stage, jailedCommand)
@@ -161,10 +163,13 @@ func runCommand(sendMessages chan interface{}, stage string, command string, lim
     }
 
     exitCode := procState.ExitCode()
-    log.Printf("Process exit code: %d\n", exitCode)
+    duration := time.Since(startTime)
 
-    sendMessages <- api.Event{Event: "completed", Stage: stage}
+    log.Printf("Process exit code: %d, stage duration: %.2f sec\n", exitCode, duration.Seconds())
+
     sendMessages <- api.ExitCode{ExitCode: exitCode, Stage: stage}
+    sendMessages <- api.Duration{DurationSec: duration.Seconds(), Stage: stage}
+    sendMessages <- api.Event{Event: "completed", Stage: stage}
 
     return exitCode == 0
 }
@@ -184,7 +189,6 @@ func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
     msgLoopExited := make(chan struct{})
 
     defer func() {
-        log.Println("Closing")
         sendMessages<- CloseEvent{}
         <-msgLoopExited
         c.Close()

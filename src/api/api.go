@@ -19,6 +19,11 @@ type ExitCode struct {
     Stage string `json:"stage"`
 }
 
+type Duration struct {
+    DurationSec float64 `json:"duration_sec"`
+    Stage string `json:"stage"`
+}
+
 type Output struct {
     Text string `json:"output"`
     Type string `json:"type"`
