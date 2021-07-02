@@ -4,24 +4,26 @@
     "stages": [
         {
             "name": "compile",
-            "command": "/usr/bin/clang++ -x c++ -o /tmp/out/prog {sources}",
+            "command": "/usr/bin/clang++ -x c++ -std=c++17 -o /tmp/out/prog {sources}",
             "limits": {
                 "address_space_mb": 400,
                 "run_time_sec": 8.0,
                 "file_descriptors": 256,
                 "file_writes_mb": 16,
-                "threads": 1600
+                "threads": 1600,
+                "output_bytes": 1000000
             }
         },
         {
             "name": "run",
             "command":"/tmp/out/prog",
             "limits": {
-                "address_space_mb": 5,
+                "address_space_mb": 25,
                 "run_time_sec": 8.0,
-                "file_descriptors": 32,
-                "file_writes_mb": 16,
-                "threads": 64
+                "file_descriptors": 1000,
+                "file_writes_mb": 1000,
+                "threads": 1000,
+                "output_bytes": 1
             }
         }
     ]
