@@ -10,12 +10,13 @@ import (
 	"log"
 )
 
-type SourceCode struct {
+type SourceFile struct {
+    Name string `json:"name"`
 	Text string `json:"text"`
 }
 
 type ClientMessage struct {
-	SourceCode *SourceCode `json:"source_code"`
+	SourceFiles []SourceFile `json:"source_files"`
 }
 
 var addr = flag.String("addr", "ws://localhost:1556/run", "runner ws address")
@@ -37,7 +38,7 @@ func main() {
 
 	encodedText := base64.StdEncoding.EncodeToString(text)
 
-	msg := ClientMessage{SourceCode: &SourceCode{Text: encodedText}}
+    msg := ClientMessage{SourceFiles: []SourceFile{SourceFile{Name: "src0", Text: encodedText}}}
 	jtext, err := json.Marshal(msg)
 	if err != nil {
 		log.Fatal("Failed to json marshal:", err)

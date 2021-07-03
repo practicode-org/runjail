@@ -1,12 +1,13 @@
 package api
 
 
-type SourceCode struct {
+type SourceFile struct {
+    Name string `json:"name"`
     Text string `json:"text"`
 }
 
 type ClientMessage struct {
-    SourceCode *SourceCode `json:"source_code"`
+    SourceFiles []SourceFile `json:"source_files"`
 }
 
 type Event struct {
