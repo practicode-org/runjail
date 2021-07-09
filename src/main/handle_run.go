@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-    "unicode"
+	"unicode"
 
 	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
@@ -48,45 +48,47 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 		return nil, errors.New("no source code")
 	}
 
-    var totalSize uint64
+	var totalSize uint64
 
-    for i, sf := range msg.SourceFiles {
-        // check file name
-        if len(sf.Name) == 0 || len(sf.Name) > 64 {
-            return nil, fmt.Errorf("source file name is too long")
-        }
-        if sf.Name[0] == '.' || sf.Name[len(sf.Name)-1] == '.' {
-            return nil, fmt.Errorf("wrong source file name: %s", sf.Name)
-        }
-        if idx := strings.IndexFunc(sf.Name, func(r rune) bool { return !unicode.IsDigit(r) && !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && r != '_' && r != '.' }); idx != -1 {
-            return nil, fmt.Errorf("forbidden character in the source file name at index %d", idx)
-        }
+	for i, sf := range msg.SourceFiles {
+		// check file name
+		if len(sf.Name) == 0 || len(sf.Name) > 64 {
+			return nil, fmt.Errorf("source file name is too long")
+		}
+		if sf.Name[0] == '.' || sf.Name[len(sf.Name)-1] == '.' {
+			return nil, fmt.Errorf("wrong source file name: %s", sf.Name)
+		}
+		if idx := strings.IndexFunc(sf.Name, func(r rune) bool {
+			return !unicode.IsDigit(r) && !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && r != '_' && r != '.'
+		}); idx != -1 {
+			return nil, fmt.Errorf("forbidden character in the source file name at index %d", idx)
+		}
 
-        // decode
-        decodedSources, err := base64.StdEncoding.DecodeString(sf.Text)
-        if err != nil {
-            return nil, fmt.Errorf("failed to decode base64: %w", err)
-        }
-        msg.SourceFiles[i].Text = string(decodedSources)
-        totalSize += uint64(len(decodedSources))
+		// decode
+		decodedSources, err := base64.StdEncoding.DecodeString(sf.Text)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64: %w", err)
+		}
+		msg.SourceFiles[i].Text = string(decodedSources)
+		totalSize += uint64(len(decodedSources))
 
-        // check size limit
-        if totalSize > rules.SourcesSizeLimitBytes {
-            return nil, fmt.Errorf("reached source code size limit: %d", rules.SourcesSizeLimitBytes)
-        }
-    }
+		// check size limit
+		if totalSize > rules.SourcesSizeLimitBytes {
+			return nil, fmt.Errorf("reached source code size limit: %d", rules.SourcesSizeLimitBytes)
+		}
+	}
 
-    fileNames := []string{}
+	fileNames := []string{}
 
-    for _, sf := range msg.SourceFiles {
-        filePath := filepath.Join(rules.SourcesDir, sf.Name)
+	for _, sf := range msg.SourceFiles {
+		filePath := filepath.Join(rules.SourcesDir, sf.Name)
 
-        err := ioutil.WriteFile(filePath, []byte(sf.Text), 0660)
-        if err != nil {
-            return nil, err
-        }
-        fileNames = append(fileNames, filePath)
-    }
+		err := ioutil.WriteFile(filePath, []byte(sf.Text), 0660)
+		if err != nil {
+			return nil, err
+		}
+		fileNames = append(fileNames, filePath)
+	}
 
 	return fileNames, nil
 }
@@ -130,7 +132,7 @@ func wrapToJail(command string, limits *rules.Limits, sourceFiles []string) (str
 		limits.Threads,
 	)
 	nsjailCmd += command
-    sourceFilesStr := strings.Join(sourceFiles, " ")
+	sourceFilesStr := strings.Join(sourceFiles, " ")
 	nsjailCmd = strings.ReplaceAll(nsjailCmd, "{sources}", sourceFilesStr)
 	return nsjailCmd, strings.Split(nsjailCmd, " ")
 }
@@ -219,6 +221,7 @@ func runCommand(sendMessages chan interface{}, stage rules.Stage, sourceFiles []
 func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
 	log.Debugf("Got a request")
 
+	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
 	c, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Errorf("Failed to upgrade to Websocket: %v\n", err)
