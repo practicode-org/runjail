@@ -1,4 +1,4 @@
-# Practicode Runner
+# Practicode Runjail
 Service written in Go that gets source code, compiles it, run the compiled program and returns its output text.
 
 Its responsibilities:
