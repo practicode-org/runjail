@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -95,6 +96,10 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 
 //
 func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<- struct{}) {
+	defer func() {
+		exitch <- struct{}{}
+	}()
+
 	for {
 		event := <-events
 		if _, close_ := event.(CloseEvent); close_ {
@@ -116,11 +121,42 @@ func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<
 
 		err = conn.WriteMessage(websocket.TextMessage, bytes)
 		if err != nil {
-			log.Errorf("Failer to write to websocket: %v\n", err)
-			continue
+			log.Errorf("Failed to write to websocket: %v\n", err)
+			return
 		}
 	}
-	exitch <- struct{}{}
+}
+
+//
+func messageRecvLoop(conn *websocket.Conn, events chan interface{}, exitch chan<- struct{}) {
+	defer func() {
+		exitch <- struct{}{}
+	}()
+
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		msg := api.ClientMessage{}
+		err = json.Unmarshal(data, &msg)
+		if err != nil {
+			log.Errorf("Failed to unmarshal message: %w, text: '%s'", err, data[:64])
+			continue
+		}
+
+		if msg.Command == "" {
+			log.Errorf("Received an empty command")
+		}
+
+		events <- msg.Command
+	}
+}
+
+func KillProcess(proc *os.Process) error {
+	// TODO: this doesn't kill child processes
+	return proc.Signal(os.Kill)
 }
 
 func wrapToJail(command string, limits *rules.Limits, sourceFiles []string) (string, []string) {
@@ -137,7 +173,7 @@ func wrapToJail(command string, limits *rules.Limits, sourceFiles []string) (str
 	return nsjailCmd, strings.Split(nsjailCmd, " ")
 }
 
-func runCommand(sendMessages chan interface{}, stage rules.Stage, sourceFiles []string) bool {
+func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, stage rules.Stage, sourceFiles []string) bool {
 	startTime := time.Now()
 
 	jailedCommand, jailedArgs := wrapToJail(stage.Command, stage.Limits, sourceFiles)
@@ -198,6 +234,37 @@ func runCommand(sendMessages chan interface{}, stage rules.Stage, sourceFiles []
 	}
 
 	sendMessages <- api.Event{Event: "started", Stage: stage.Name}
+	log.Debugf("Started process pid %d", cmd.Process.Pid)
+
+	// listen to commands from the client
+	var killed int32
+	quitCmdLoop := make(chan struct{})
+	go func() {
+		proc := cmd.Process
+		quit := false
+		for !quit {
+			select {
+			case cmd, ok := <-clientCommands:
+				if !ok {
+					break
+				}
+				if cmd == "stop" {
+					err := KillProcess(proc)
+					if err != nil {
+						log.Errorf("Failed to kill process pid %d: %v", proc.Pid, err)
+					}
+					atomic.StoreInt32(&killed, 1)
+					break
+				} else {
+					log.Errorf("Received unknown client command: %q", cmd)
+				}
+			case <-quitCmdLoop:
+				quit = true
+				break
+			}
+		}
+	}()
+	defer func() { close(quitCmdLoop) }()
 
 	//
 	procState, err := cmd.Process.Wait()
@@ -209,7 +276,11 @@ func runCommand(sendMessages chan interface{}, stage rules.Stage, sourceFiles []
 	exitCode := procState.ExitCode()
 	duration := time.Since(startTime)
 
-	log.Infof("Process exit code: %d, stage duration: %.2f sec, output: %d bytes\n", exitCode, duration.Seconds(), outputTransferred)
+	if atomic.LoadInt32(&killed) != 0 {
+		log.Infof("Process killed by client request, exit code: %d, stage duration: %.2f sec, output: %d bytes", exitCode, duration.Seconds(), outputTransferred)
+	} else {
+		log.Infof("Process exit code: %d, stage duration: %.2f sec, output: %d bytes", exitCode, duration.Seconds(), outputTransferred)
+	}
 
 	sendMessages <- api.ExitCode{ExitCode: exitCode, Stage: stage.Name}
 	sendMessages <- api.Duration{DurationSec: duration.Seconds(), Stage: stage.Name}
@@ -229,32 +300,35 @@ func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 
-	// preparation
-	sendMessages := make(chan interface{}, 256)
-	msgLoopExited := make(chan struct{})
-
-	defer func() {
-		sendMessages <- CloseEvent{}
-		<-msgLoopExited
-		c.Close()
-		close(sendMessages)
-		log.Debugf("Done")
-	}()
-
-	go messageSendLoop(c, sendMessages, msgLoopExited)
-
 	// read source code
 	sourceFiles, err := receiveSourceCode(c, rules)
 	if err != nil {
-		sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init"}
+		// TODO: sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init"}
 		return
 	}
 
+	// preparation
+	sendMessages := make(chan interface{}, 256)
+	recvMessages := make(chan interface{}, 4)
+	msgSendExited := make(chan struct{})
+	msgRecvExited := make(chan struct{})
+
+	go messageSendLoop(c, sendMessages, msgSendExited)
+	go messageRecvLoop(c, recvMessages, msgRecvExited)
+
+	defer func() {
+		sendMessages <- CloseEvent{}
+		<-msgSendExited
+		c.Close()
+		<-msgRecvExited
+		close(sendMessages)
+		close(recvMessages)
+		log.Debugf("Done")
+	}()
+
 	// run stages
 	for i := 0; i < len(rules.Stages); i++ {
-		stage := rules.Stages[i]
-
-		success := runCommand(sendMessages, stage, sourceFiles)
+		success := runCommand(sendMessages, recvMessages, rules.Stages[i], sourceFiles)
 		if !success {
 			break
 		}

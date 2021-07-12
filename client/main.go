@@ -11,7 +11,7 @@ import (
 )
 
 type SourceFile struct {
-    Name string `json:"name"`
+	Name string `json:"name"`
 	Text string `json:"text"`
 }
 
@@ -38,7 +38,7 @@ func main() {
 
 	encodedText := base64.StdEncoding.EncodeToString(text)
 
-    msg := ClientMessage{SourceFiles: []SourceFile{SourceFile{Name: "src0", Text: encodedText}}}
+	msg := ClientMessage{SourceFiles: []SourceFile{SourceFile{Name: "src0", Text: encodedText}}}
 	jtext, err := json.Marshal(msg)
 	if err != nil {
 		log.Fatal("Failed to json marshal:", err)
