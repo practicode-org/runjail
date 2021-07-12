@@ -4,6 +4,7 @@ package api
 type SourceFile struct {
 	Name string `json:"name"`
 	Text string `json:"text"`
+	Hash string `json:"hash"`
 }
 
 type ClientMessage struct {

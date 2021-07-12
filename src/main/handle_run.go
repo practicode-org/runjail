@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -57,7 +58,10 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 			return nil, fmt.Errorf("source file name is too long")
 		}
 		if sf.Name[0] == '.' || sf.Name[len(sf.Name)-1] == '.' {
-			return nil, fmt.Errorf("wrong source file name: %s", sf.Name)
+			return nil, fmt.Errorf("wrong source file name %q", sf.Name)
+		}
+		if len(sf.Hash) != md5.Size*2 {
+			return nil, fmt.Errorf("wrong hash length (%d), must be %d for hex MD5", len(sf.Hash), md5.Size*2)
 		}
 		if idx := strings.IndexFunc(sf.Name, func(r rune) bool {
 			return !unicode.IsDigit(r) && !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && r != '_' && r != '.'
@@ -72,6 +76,14 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 		}
 		msg.SourceFiles[i].Text = string(decodedSources)
 		totalSize += uint64(len(decodedSources))
+
+		// check hash
+		computedHash := fmt.Sprintf("%x", md5.Sum(decodedSources))
+		for j := 0; j < md5.Size*2; j++ {
+			if computedHash[j] != sf.Hash[j] {
+				return nil, fmt.Errorf("hash for %q doesn't match the source code", sf.Name)
+			}
+		}
 
 		// check size limit
 		if totalSize > rules.SourcesSizeLimitBytes {
@@ -300,21 +312,12 @@ func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 
-	// read source code
-	sourceFiles, err := receiveSourceCode(c, rules)
-	if err != nil {
-		// TODO: sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init"}
-		return
-	}
-
 	// preparation
 	sendMessages := make(chan interface{}, 256)
 	recvMessages := make(chan interface{}, 4)
 	msgSendExited := make(chan struct{})
 	msgRecvExited := make(chan struct{})
-
 	go messageSendLoop(c, sendMessages, msgSendExited)
-	go messageRecvLoop(c, recvMessages, msgRecvExited)
 
 	defer func() {
 		sendMessages <- CloseEvent{}
@@ -325,6 +328,16 @@ func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
 		close(recvMessages)
 		log.Debugf("Done")
 	}()
+
+	// read source code
+	sourceFiles, err := receiveSourceCode(c, rules)
+	if err != nil {
+		sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init"}
+		return
+	}
+
+	// TODO: use RECV loop for source code
+	go messageRecvLoop(c, recvMessages, msgRecvExited)
 
 	// run stages
 	for i := 0; i < len(rules.Stages); i++ {
