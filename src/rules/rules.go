@@ -21,9 +21,11 @@ type Limits struct {
 }
 
 type Stage struct {
-	Name    string  `json:"name"`
-	Command string  `json:"command"`
-	Limits  *Limits `json:"limits"`
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Env     []string `json:"env"`
+	Mounts  []string `json:"mounts"`
+	Limits  *Limits  `json:"limits"`
 }
 
 type Rules struct {

@@ -77,17 +77,17 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 		msg.SourceFiles[i].Text = string(decodedSources)
 		totalSize += uint64(len(decodedSources))
 
+		// check size limit
+		if totalSize > rules.SourcesSizeLimitBytes {
+			return nil, fmt.Errorf("reached source code size limit: %d", rules.SourcesSizeLimitBytes)
+		}
+
 		// check hash
 		computedHash := fmt.Sprintf("%x", md5.Sum(decodedSources))
 		for j := 0; j < md5.Size*2; j++ {
 			if computedHash[j] != sf.Hash[j] {
 				return nil, fmt.Errorf("hash for %q doesn't match the source code", sf.Name)
 			}
-		}
-
-		// check size limit
-		if totalSize > rules.SourcesSizeLimitBytes {
-			return nil, fmt.Errorf("reached source code size limit: %d", rules.SourcesSizeLimitBytes)
 		}
 	}
 
@@ -171,8 +171,20 @@ func KillProcess(proc *os.Process) error {
 	return proc.Signal(os.Kill)
 }
 
-func wrapToJail(command string, limits *rules.Limits, sourceFiles []string) (string, []string) {
-	nsjailCmd := fmt.Sprintf("/usr/bin/nsjail --quiet --nice_level=0 --bindmount=/tmp/out --time_limit=%.1f --rlimit_as=%d --rlimit_core=0 --rlimit_fsize=%d --rlimit_nofile=%d --rlimit_nproc=%d --chroot / -- ",
+func wrapToJail(command string, env []string, mounts []string, limits *rules.Limits, sourceFiles []string) (string, []string) {
+	envStr := ""
+	for _, envVar := range env {
+		envStr += " --env=" + envVar
+	}
+
+	mountStr := ""
+	for _, mountDir := range mounts {
+		mountStr += " --bindmount=" + mountDir
+	}
+
+	nsjailCmd := fmt.Sprintf("/usr/bin/nsjail --really_quiet --nice_level=0%s%s --time_limit=%.1f --rlimit_as=%d --rlimit_core=0 --rlimit_fsize=%d --rlimit_nofile=%d --rlimit_nproc=%d --chroot / -- ",
+		mountStr,
+		envStr,
 		limits.RunTime,
 		limits.AddressSpace,
 		limits.FileWrites,
@@ -180,6 +192,7 @@ func wrapToJail(command string, limits *rules.Limits, sourceFiles []string) (str
 		limits.Threads,
 	)
 	nsjailCmd += command
+	// replace {sources} with source files paths
 	sourceFilesStr := strings.Join(sourceFiles, " ")
 	nsjailCmd = strings.ReplaceAll(nsjailCmd, "{sources}", sourceFilesStr)
 	return nsjailCmd, strings.Split(nsjailCmd, " ")
@@ -188,7 +201,7 @@ func wrapToJail(command string, limits *rules.Limits, sourceFiles []string) (str
 func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, stage rules.Stage, sourceFiles []string) bool {
 	startTime := time.Now()
 
-	jailedCommand, jailedArgs := wrapToJail(stage.Command, stage.Limits, sourceFiles)
+	jailedCommand, jailedArgs := wrapToJail(stage.Command, stage.Env, stage.Mounts, stage.Limits, sourceFiles)
 
 	log.Infof("Running stage '%s' command: %s\n", stage.Name, jailedCommand)
 
