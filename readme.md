@@ -1,5 +1,5 @@
 # Practicode Runjail
-Service written in Go that gets source code, compiles it, runы the compiled program and returns its output text.
+Service written in Go that gets source code, compiles it, runs the compiled program and returns its output text.
 
 Its responsibilities:
 - listens to a Websocket
