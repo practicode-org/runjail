@@ -1,20 +1,20 @@
 {
-    "sources_dir": "/tmp/sources",
-    "sources_size_limit_bytes": 6000,
     "stages": [
         {
             "name": "compile",
-            "command": "/usr/bin/clang++-12 -x c++ -std=c++17 -o /tmp/out/prog {sources}",
+            "command": "/usr/lib/go-1.13/bin/go build -o /tmp/out/prog {sources}",
+            "env": [
+                "GOCACHE=/tmp/out/"
+            ],
             "mounts": [
-              "/tmp/",
-              "/tmp/out"
+                "/tmp/"
             ],
             "limits": {
-                "address_space_mb": 400,
+                "address_space_mb": 2024,
                 "run_time_sec": 8.0,
-                "file_descriptors": 256,
-                "file_writes_mb": 16,
-                "threads": 1600,
+                "file_descriptors": 1024,
+                "file_writes_mb": 256,
+                "threads": 4000,
                 "output_bytes": 1000000
             }
         },
@@ -22,7 +22,7 @@
             "name": "run",
             "command":"/tmp/out/prog",
             "limits": {
-                "address_space_mb": 80,
+                "address_space_mb": 1024,
                 "run_time_sec": 20.0,
                 "file_descriptors": 256,
                 "file_writes_mb": 16,

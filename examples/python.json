@@ -1,6 +1,4 @@
 {
-    "sources_dir": "/tmp/sources",
-    "sources_size_limit_bytes": 6000,
     "stages": [
         {
             "name": "run",

@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
@@ -29,39 +30,17 @@ type Stage struct {
 }
 
 type Rules struct {
-	SourcesDir            string  `json:"sources_dir"`
-	SourcesSizeLimitBytes uint64  `json:"sources_size_limit_bytes"` // Bytes
-	Stages                []Stage `json:"stages"`
+	Stages []Stage `json:"stages"`
 }
+
+var (
+	RulesMap = make(map[string]*Rules)
+)
 
 //
 func (r *Rules) Check() error {
-	if r.SourcesDir == "" {
-		return fmt.Errorf("SourcesDir can't be empty")
-	}
-
-	// check sources directory
-	stat, err := os.Stat(r.SourcesDir)
-	if err != nil {
-		return fmt.Errorf("failed to get stats of SourcesDir: %s", r.SourcesDir)
-	}
-	if !stat.IsDir() {
-		return fmt.Errorf("SourcesDir is not a directory: %s", r.SourcesDir)
-	}
-	if stat.Mode()&0666 != 0666 { // need rwxrwrwx rights
-		return fmt.Errorf("SourcesDir has unsuitable permissions: %v", stat.Mode())
-	}
-
-	//
-	if r.SourcesSizeLimitBytes == 0 {
-		return fmt.Errorf("SourcesSizeLimitBytes can't be zero")
-	} else if r.SourcesSizeLimitBytes < 1024 {
-		log.Warningf("SourcesSizeLimitBytes %d seems very low\n", r.SourcesSizeLimitBytes)
-	} else if r.SourcesSizeLimitBytes > 1024*1024*10 {
-		log.Warningf("SourcesSizeLimitBytes %d seems too high\n", r.SourcesSizeLimitBytes)
-	}
-
 	// check every stage
+	// TODO: print rule name
 	for _, stage := range r.Stages {
 		if stage.Name == "" {
 			return fmt.Errorf("Stage.Name can't be empty")
@@ -126,40 +105,52 @@ func (r *Rules) Check() error {
 	return nil
 }
 
-//
-func ReadJsonRules(data []byte) (*Rules, error) {
-	rules := &Rules{}
-	err := json.Unmarshal(data, rules)
+func LoadRules(filesDir string) error {
+	files, err := ioutil.ReadDir(filesDir)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to ReadDir: %w", err)
 	}
 
-	if rules.SourcesDir == "" {
-		log.Fatal("Misconfig: Empty sources_dir")
-	}
-
-	err = rules.Check()
-	if err != nil {
-		return nil, err
-	}
-	return rules, nil
-}
-
-func LoadRules(filePath string) (*Rules, error) {
-	bytes, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open rules file: %w", err)
-	}
-
-	ext := filepath.Ext(filePath)
-	if ext == ".yaml" || ext == ".yml" {
-		pipeline := &Rules{}
-		err := yaml.Unmarshal(bytes, pipeline)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load rules from yaml file: %w", err)
+	for _, file := range files {
+		ext := filepath.Ext(file.Name())
+		if ext != ".yaml" && ext != ".yml" && ext != ".json" {
+			continue
 		}
-		return pipeline, nil
+
+		filePath := path.Join(filesDir, file.Name())
+		bytes, err := ioutil.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to open rules file %s: %w", file.Name(), err)
+		}
+
+		rules := &Rules{}
+
+		if ext == ".json" {
+			err = json.Unmarshal(bytes, rules)
+		} else {
+			err = yaml.Unmarshal(bytes, rules)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal rules file %s: %w", file.Name(), err)
+		}
+
+		err = rules.Check()
+		if err != nil {
+			return fmt.Errorf("error in rules file %s: %w", file.Name(), err)
+		}
+
+		shortName := strings.TrimSuffix(file.Name(), ext)
+		if len(shortName) == 0 {
+			return fmt.Errorf("failed to trim suffix %s for file %s", ext, file.Name())
+		}
+
+		RulesMap[shortName] = rules
 	}
 
-	return ReadJsonRules(bytes)
+	if len(RulesMap) > 0 {
+		log.Infof("Loaded %d rules from %s\n", len(RulesMap), filesDir)
+	} else {
+		log.Warningf("No rules found in %s\n", filesDir)
+	}
+	return nil
 }

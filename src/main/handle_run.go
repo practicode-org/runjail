@@ -21,6 +21,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/practicode-org/runner/src/api"
+	"github.com/practicode-org/runner/src/config"
 	"github.com/practicode-org/runner/src/rules"
 )
 
@@ -34,7 +35,7 @@ const (
 )
 
 //
-func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, error) {
+func receiveSourceCode(conn *websocket.Conn) ([]string, error) {
 	// TODO: use conn.readLimit
 	_, data, err := conn.ReadMessage()
 	if err != nil {
@@ -47,7 +48,7 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 		return nil, fmt.Errorf("failed to unmarshal message: %w, text: '%s'", err, data[:64])
 	}
 	if msg.SourceFiles == nil || len(msg.SourceFiles) == 0 {
-		return nil, errors.New("no source code")
+		return nil, errors.New("no source code when it's expected")
 	}
 
 	var totalSize uint64
@@ -78,8 +79,8 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 		totalSize += uint64(len(decodedSources))
 
 		// check size limit
-		if totalSize > rules.SourcesSizeLimitBytes {
-			return nil, fmt.Errorf("reached source code size limit: %d", rules.SourcesSizeLimitBytes)
+		if totalSize > config.Cfg.SourcesSizeLimitBytes {
+			return nil, fmt.Errorf("reached source code size limit: %d", config.Cfg.SourcesSizeLimitBytes)
 		}
 
 		// check hash
@@ -94,7 +95,7 @@ func receiveSourceCode(conn *websocket.Conn, rules *rules.Rules) ([]string, erro
 	fileNames := []string{}
 
 	for _, sf := range msg.SourceFiles {
-		filePath := filepath.Join(rules.SourcesDir, sf.Name)
+		filePath := filepath.Join(config.Cfg.SourcesDir, sf.Name)
 
 		err := ioutil.WriteFile(filePath, []byte(sf.Text), 0660)
 		if err != nil {
@@ -314,13 +315,31 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 	return exitCode == 0
 }
 
-func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
+func handleRun(w http.ResponseWriter, r *http.Request) {
 	log.Debugf("Got a request")
 
-	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	query := r.URL.Query()
+
+	taskTemplate := query.Get("task-template")
+	if taskTemplate == "" {
+		log.Errorf("Error: got a request without task template\n")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	log.Infof("Using task template %s\n", taskTemplate)
+	rules, ok := rules.RulesMap[taskTemplate]
+	if !ok {
+		log.Errorf("Requested task template %s is not loaded\n", taskTemplate)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true } // TODO: fix
 	c, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Errorf("Failed to upgrade to Websocket: %v\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	defer c.Close()
@@ -343,7 +362,7 @@ func handleRun(rules *rules.Rules, w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// read source code
-	sourceFiles, err := receiveSourceCode(c, rules)
+	sourceFiles, err := receiveSourceCode(c)
 	if err != nil {
 		sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init"}
 		return

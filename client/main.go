@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -13,13 +14,14 @@ import (
 type SourceFile struct {
 	Name string `json:"name"`
 	Text string `json:"text"`
+	Hash string `json:"hash"`
 }
 
 type ClientMessage struct {
 	SourceFiles []SourceFile `json:"source_files"`
 }
 
-var addr = flag.String("addr", "ws://localhost:1556/run", "runner ws address")
+var addr = flag.String("addr", "ws://localhost:1556/run?task-template=cpp", "runner ws address")
 var inputFile = flag.String("input", "", "")
 
 func main() {
@@ -38,7 +40,10 @@ func main() {
 
 	encodedText := base64.StdEncoding.EncodeToString(text)
 
-	msg := ClientMessage{SourceFiles: []SourceFile{SourceFile{Name: "src0", Text: encodedText}}}
+	msg := ClientMessage{SourceFiles: []SourceFile{SourceFile{Name: "src0",
+		Text: encodedText,
+		Hash: fmt.Sprintf("%x", md5.Sum([]byte(text)))}}}
+
 	jtext, err := json.Marshal(msg)
 	if err != nil {
 		log.Fatal("Failed to json marshal:", err)

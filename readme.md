@@ -9,4 +9,4 @@ Its responsibilities:
 - sends events to a client, such as: compilation started, ended, program started, etc
 
 ## How to build
-`make` or `sudo docker build -f docker/Dockerfile -t practicode-runjail .`
+`make` or `sudo docker build -f docker/Dockerfile.cpp -t practicode-runjail .`
