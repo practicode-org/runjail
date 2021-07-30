@@ -42,17 +42,17 @@ FROM ubuntu:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+COPY --from=build-runner /build/bin/main /runner
+COPY --from=build-nsjail /nsjail/nsjail /usr/bin/nsjail
+COPY ./rules /run/rules
+
 RUN apt-get update && apt-get install -y libprotobuf17 libnl-route-3-200
 RUN apt-get install -y golang-1.13
 
 ENV PATH /usr/lib/go-1.13/bin:$PATH
 
-COPY --from=build-runjail /build/bin/main /runjail
-COPY ./examples/go-rules.json /run/go-rules.json
-COPY --from=build-nsjail /nsjail/nsjail /usr/bin/nsjail
-
 EXPOSE 1556
 RUN mkdir /tmp/sources/ && chmod ugo+rwx /tmp/sources/
 #RUN mkdir /tmp/gocache/
 #RUN mkdir /tmp/gopath/
-ENTRYPOINT /runjail -rules /run/go-rules.json
+ENTRYPOINT /runner -rules-dir /run/rules

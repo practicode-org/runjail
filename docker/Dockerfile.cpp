@@ -44,14 +44,14 @@ FROM ubuntu:18.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y wget lsb-release software-properties-common libprotobuf10 libnl-route-3-200
-RUN bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
-
 COPY --from=build-runner /build/bin/main /runner
 COPY --from=build-nsjail /nsjail/nsjail /usr/bin/nsjail
-COPY ./examples/cpp-rules.json /run/cpp-rules.json
+COPY ./rules /run/rules
+
+RUN apt-get update && apt-get install -y wget lsb-release software-properties-common libprotobuf10 libnl-route-3-200
+RUN bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 
 EXPOSE 1556
 RUN mkdir /tmp/sources/ && chmod ugo+rwx /tmp/sources/
 RUN mkdir /tmp/out
-ENTRYPOINT /runner -rules /run/cpp-rules.json
+ENTRYPOINT /runner -rules-dir /run/rules
