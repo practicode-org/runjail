@@ -327,10 +327,10 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Infof("Using task template %s\n", taskTemplate)
+	log.Infof("Using task template '%s'\n", taskTemplate)
 	rules, ok := rules.RulesMap[taskTemplate]
 	if !ok {
-		log.Errorf("Requested task template %s is not loaded\n", taskTemplate)
+		log.Errorf("Requested task template '%s' is not loaded\n", taskTemplate)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

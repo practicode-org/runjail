@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/gorilla/websocket"
 	"io/ioutil"
 	"log"
+
+	"github.com/gorilla/websocket"
 )
 
 type SourceFile struct {
@@ -21,7 +22,7 @@ type ClientMessage struct {
 	SourceFiles []SourceFile `json:"source_files"`
 }
 
-var addr = flag.String("addr", "ws://localhost:1556/run?task-template=cpp", "runner ws address")
+var addr = flag.String("addr", "ws://localhost:1556/run?task-template=cpp-generic", "runner ws address")
 var inputFile = flag.String("input", "", "")
 
 func main() {

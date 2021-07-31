@@ -2,7 +2,7 @@
     "stages": [
         {
             "name": "compile",
-            "command": "/usr/bin/clang++ -x c++ -std=c++17 -o /tmp/out/prog {sources}",
+            "command": "/usr/bin/clang++-12 -x c++ -lpthread -std=c++17 -o /tmp/out/prog {sources}",
             "mounts": [
               "/tmp/",
               "/tmp/out"

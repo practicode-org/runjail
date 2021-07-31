@@ -111,6 +111,8 @@ func LoadRules(filesDir string) error {
 		return fmt.Errorf("failed to ReadDir: %w", err)
 	}
 
+	ruleNames := make([]string, 0)
+
 	for _, file := range files {
 		ext := filepath.Ext(file.Name())
 		if ext != ".yaml" && ext != ".yml" && ext != ".json" {
@@ -145,10 +147,11 @@ func LoadRules(filesDir string) error {
 		}
 
 		RulesMap[shortName] = rules
+		ruleNames = append(ruleNames, shortName)
 	}
 
 	if len(RulesMap) > 0 {
-		log.Infof("Loaded %d rules from %s\n", len(RulesMap), filesDir)
+		log.Infof("Loaded %d rules from %s: [%s]\n", len(RulesMap), filesDir, strings.Join(ruleNames, ", "))
 	} else {
 		log.Warningf("No rules found in %s\n", filesDir)
 	}
