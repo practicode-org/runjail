@@ -1,4 +1,4 @@
-module github.com/practicode-org/runner
+module github.com/practicode-org/worker
 
 go 1.16
 

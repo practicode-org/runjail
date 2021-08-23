@@ -19,9 +19,9 @@ import (
 	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/practicode-org/runner/src/api"
-	"github.com/practicode-org/runner/src/config"
-	"github.com/practicode-org/runner/src/rules"
+	"github.com/practicode-org/worker/src/api"
+	"github.com/practicode-org/worker/src/config"
+	"github.com/practicode-org/worker/src/rules"
 )
 
 var wsUpgrader = websocket.Upgrader{}

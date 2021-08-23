@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/practicode-org/runner/src/api"
+	"github.com/practicode-org/worker/src/api"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/gorilla/websocket"

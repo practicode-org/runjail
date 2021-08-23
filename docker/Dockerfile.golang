@@ -42,7 +42,7 @@ FROM ubuntu:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY --from=build-runner /build/bin/main /runner
+COPY --from=build-worker /build/bin/main /worker
 COPY --from=build-nsjail /nsjail/nsjail /usr/bin/nsjail
 COPY ./rules /run/rules
 
@@ -55,4 +55,4 @@ EXPOSE 1556
 RUN mkdir /tmp/sources/ && chmod ugo+rwx /tmp/sources/
 #RUN mkdir /tmp/gocache/
 #RUN mkdir /tmp/gopath/
-ENTRYPOINT /runner -rules-dir /run/rules
+ENTRYPOINT /worker -rules-dir /run/rules

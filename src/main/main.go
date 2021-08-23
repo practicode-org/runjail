@@ -9,8 +9,8 @@ import (
 	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/practicode-org/runner/src/config"
-	"github.com/practicode-org/runner/src/rules"
+	"github.com/practicode-org/worker/src/config"
+	"github.com/practicode-org/worker/src/rules"
 )
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {

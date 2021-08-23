@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:18.04 as build-runner
+FROM ubuntu:18.04 as build-worker
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -44,7 +44,7 @@ FROM ubuntu:18.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY --from=build-runner /build/bin/main /runner
+COPY --from=build-worker /build/bin/main /worker
 COPY --from=build-nsjail /nsjail/nsjail /usr/bin/nsjail
 COPY ./rules /run/rules
 
@@ -54,4 +54,4 @@ RUN bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 EXPOSE 1556
 RUN mkdir /tmp/sources/ && chmod ugo+rwx /tmp/sources/
 RUN mkdir /tmp/out
-ENTRYPOINT /runner -rules-dir /run/rules
+ENTRYPOINT /worker -rules-dir /run/rules
