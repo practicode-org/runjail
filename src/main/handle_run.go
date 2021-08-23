@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,18 +33,13 @@ const (
 	SourceCodeError
 )
 
-//
-func receiveSourceCode(conn *websocket.Conn) ([]string, error) {
-	// TODO: use conn.readLimit
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from websocket: %w", err)
-	}
+func receiveSourceCode(recvMessages <-chan []byte) ([]string, error) {
+	bytes := <-recvMessages
 
 	msg := api.ClientMessage{}
-	err = json.Unmarshal(data, &msg)
+	err := json.Unmarshal(bytes, &msg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal message: %w, text: '%s'", err, data[:64])
+		return nil, fmt.Errorf("failed to unmarshal message: %w, text: %s", err, trimLongString(string(bytes), 64))
 	}
 	if msg.SourceFiles == nil || len(msg.SourceFiles) == 0 {
 		return nil, errors.New("no source code when it's expected")
@@ -97,7 +91,7 @@ func receiveSourceCode(conn *websocket.Conn) ([]string, error) {
 	for _, sf := range msg.SourceFiles {
 		filePath := filepath.Join(config.Cfg.SourcesDir, sf.Name)
 
-		err := ioutil.WriteFile(filePath, []byte(sf.Text), 0660)
+		err := ioutil.WriteFile(filePath, []byte(sf.Text), 0660) // rw-/rw-/---
 		if err != nil {
 			return nil, err
 		}
@@ -105,66 +99,6 @@ func receiveSourceCode(conn *websocket.Conn) ([]string, error) {
 	}
 
 	return fileNames, nil
-}
-
-//
-func messageSendLoop(conn *websocket.Conn, events chan interface{}, exitch chan<- struct{}) {
-	defer func() {
-		exitch <- struct{}{}
-	}()
-
-	for {
-		event := <-events
-		if _, close_ := event.(CloseEvent); close_ {
-			break
-		}
-
-		// error messages also go to stdout
-		if errMsg, ok := event.(api.Error); ok {
-			log.Error("Error:", errMsg.Desc)
-		}
-
-		bytes, err := json.Marshal(&event)
-		if err != nil {
-			go func() {
-				events <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to marshal message: %v", err)}
-			}()
-			continue
-		}
-
-		err = conn.WriteMessage(websocket.TextMessage, bytes)
-		if err != nil {
-			log.Errorf("Failed to write to websocket: %v\n", err)
-			return
-		}
-	}
-}
-
-//
-func messageRecvLoop(conn *websocket.Conn, events chan interface{}, exitch chan<- struct{}) {
-	defer func() {
-		exitch <- struct{}{}
-	}()
-
-	for {
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-
-		msg := api.ClientMessage{}
-		err = json.Unmarshal(data, &msg)
-		if err != nil {
-			log.Errorf("Failed to unmarshal message: %w, text: '%s'", err, data[:64])
-			continue
-		}
-
-		if msg.Command == "" {
-			log.Errorf("Received an empty command")
-		}
-
-		events <- msg.Command
-	}
 }
 
 func KillProcess(proc *os.Process) error {
@@ -199,7 +133,7 @@ func wrapToJail(command string, env []string, mounts []string, limits *rules.Lim
 	return nsjailCmd, strings.Split(nsjailCmd, " ")
 }
 
-func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, stage rules.Stage, sourceFiles []string) bool {
+func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, stage rules.Stage, sourceFiles []string, requestID string) bool {
 	startTime := time.Now()
 
 	jailedCommand, jailedArgs := wrapToJail(stage.Command, stage.Env, stage.Mounts, stage.Limits, sourceFiles)
@@ -210,12 +144,12 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stdout pipe: %v", err), Stage: stage.Name}
+		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stdout pipe: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stderr pipe: %v", err), Stage: stage.Name}
+		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stderr pipe: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 
@@ -226,7 +160,7 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 			buf := make([]byte, 512)
 			n, err := readFrom.Read(buf)
 			if err != nil && err != io.EOF {
-				sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Error while reading stdout: %v", err), Stage: stage.Name}
+				sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Error while reading stdout: %v", err), Stage: stage.Name, RequestID: requestID}
 				break
 			}
 			if n == 0 && err == io.EOF {
@@ -234,7 +168,7 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 			}
 
 			encodedStr := base64.StdEncoding.EncodeToString(buf[:n])
-			sendMessages <- api.Output{Text: encodedStr, Type: type_, Stage: stage.Name}
+			sendMessages <- api.Output{Text: encodedStr, Type: type_, Stage: stage.Name, RequestID: requestID}
 
 			// check limits
 			transferredNew := atomic.AddUint64(&outputTransferred, uint64(n))
@@ -255,11 +189,11 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 
 	err = cmd.Start()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to run program process: %v", err), Stage: stage.Name}
+		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to run program process: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 
-	sendMessages <- api.Event{Event: "started", Stage: stage.Name}
+	sendMessages <- api.StageEvent{Event: "started", Stage: stage.Name, RequestID: requestID}
 	log.Debugf("Started process pid %d", cmd.Process.Pid)
 
 	// listen to commands from the client
@@ -270,11 +204,17 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 		quit := false
 		for !quit {
 			select {
-			case cmd, ok := <-clientCommands:
+			case bytes, ok := <-clientCommands:
 				if !ok {
 					break
 				}
-				if cmd == "stop" {
+				msg := api.ClientMessage{}
+				err := json.Unmarshal(bytes, &msg)
+				if err != nil {
+					log.Errorf("Failed to unmarshal: %v, message: %s", err, trimLongString(string(bytes), 64))
+					continue
+				}
+				if msg.Command == "stop" {
 					err := KillProcess(proc)
 					if err != nil {
 						log.Errorf("Failed to kill process pid %d: %v", proc.Pid, err)
@@ -282,7 +222,7 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 					atomic.StoreInt32(&killed, 1)
 					break
 				} else {
-					log.Errorf("Received unknown client command: %q", cmd)
+					log.Errorf("Received unknown client message (expected a stop command only), message: %s", trimLongString(string(bytes), 64))
 				}
 			case <-quitCmdLoop:
 				quit = true
@@ -295,7 +235,7 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 	//
 	procState, err := cmd.Process.Wait()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to wait program process: %v", err), Stage: stage.Name}
+		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to wait program process: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 
@@ -308,34 +248,31 @@ func runCommand(sendMessages chan interface{}, clientCommands chan interface{}, 
 		log.Infof("Process exit code: %d, stage duration: %.2f sec, output: %d bytes", exitCode, duration.Seconds(), outputTransferred)
 	}
 
-	sendMessages <- api.ExitCode{ExitCode: exitCode, Stage: stage.Name}
-	sendMessages <- api.Duration{DurationSec: duration.Seconds(), Stage: stage.Name}
-	sendMessages <- api.Event{Event: "completed", Stage: stage.Name}
+	sendMessages <- api.ExitCode{ExitCode: exitCode, Stage: stage.Name, RequestID: requestID}
+	sendMessages <- api.Duration{DurationSec: duration.Seconds(), Stage: stage.Name, RequestID: requestID}
+	sendMessages <- api.StageEvent{Event: "completed", Stage: stage.Name, RequestID: requestID}
 
 	return exitCode == 0
 }
 
-func handleRun(w http.ResponseWriter, r *http.Request) {
+/*func handleRun(w http.ResponseWriter, r *http.Request, buildEnv string) {
 	log.Debugf("Got a request")
 
 	query := r.URL.Query()
 
-	taskTemplate := query.Get("task-template")
-	if taskTemplate == "" {
-		log.Errorf("Error: got a request without task template\n")
+	requestBuildEnv := query.Get("build_env")
+	if requestBuildEnv == "" {
+		log.Errorf("Error: got a request without build_env\n")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if buildEnv != requestBuildEnv {
+		log.Errorf("Error: got a request with build_env %s, but %s is loaded\n", buildEnv, requestBuildEnv)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	log.Infof("Using task template '%s'\n", taskTemplate)
-	rules, ok := rules.RulesMap[taskTemplate]
-	if !ok {
-		log.Errorf("Requested task template '%s' is not loaded\n", taskTemplate)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true } // TODO: fix
+	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
 	c, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Errorf("Failed to upgrade to Websocket: %v\n", err)
@@ -344,38 +281,23 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 
-	// preparation
-	sendMessages := make(chan interface{}, 256)
-	recvMessages := make(chan interface{}, 4)
-	msgSendExited := make(chan struct{})
-	msgRecvExited := make(chan struct{})
-	go messageSendLoop(c, sendMessages, msgSendExited)
+	handleWsConnection(c, "no-request-id") // TODO: fix
+}*/
 
-	defer func() {
-		sendMessages <- CloseEvent{}
-		<-msgSendExited
-		c.Close()
-		<-msgRecvExited
-		close(sendMessages)
-		close(recvMessages)
-		log.Debugf("Done")
-	}()
-
+func handleRequest(requestID string, recvMessages <-chan []byte, sendMessages chan<- interface{}) {
 	// read source code
-	sourceFiles, err := receiveSourceCode(c)
+	sourceFiles, err := receiveSourceCode(recvMessages)
 	if err != nil {
-		sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init"}
+		sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init", RequestID: requestID}
 		return
 	}
 
-	// TODO: use RECV loop for source code
-	go messageRecvLoop(c, recvMessages, msgRecvExited)
-
 	// run stages
-	for i := 0; i < len(rules.Stages); i++ {
-		success := runCommand(sendMessages, recvMessages, rules.Stages[i], sourceFiles)
+	for i := 0; i < len(rules.Rule.Stages); i++ {
+		success := runCommand(sendMessages, recvMessages, rules.Rule.Stages[i], sourceFiles, requestID)
 		if !success {
 			break
 		}
 	}
+	sendMessages <- api.Finish{Finish: true, RequestID: requestID}
 }

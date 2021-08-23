@@ -22,7 +22,7 @@ type ClientMessage struct {
 	SourceFiles []SourceFile `json:"source_files"`
 }
 
-var addr = flag.String("addr", "ws://localhost:1556/run?task-template=cpp-generic", "runner ws address")
+var addr = flag.String("addr", "ws://localhost:1556/run?build_env=cpp-generic", "worker ws address")
 var inputFile = flag.String("input", "", "")
 
 func main() {
