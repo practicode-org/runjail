@@ -33,9 +33,7 @@ type Rules struct {
 	Stages []Stage `json:"stages"`
 }
 
-var (
-	RulesMap = make(map[string]*Rules)
-)
+var Rule *Rules = nil
 
 //
 func (r *Rules) Check() error {
@@ -105,17 +103,22 @@ func (r *Rules) Check() error {
 	return nil
 }
 
-func LoadRules(filesDir string) error {
+func LoadRules(filesDir string, buildEnvName string) error {
 	files, err := ioutil.ReadDir(filesDir)
 	if err != nil {
 		return fmt.Errorf("failed to ReadDir: %w", err)
 	}
 
-	ruleNames := make([]string, 0)
-
 	for _, file := range files {
 		ext := filepath.Ext(file.Name())
 		if ext != ".yaml" && ext != ".yml" && ext != ".json" {
+			continue
+		}
+		shortName := strings.TrimSuffix(file.Name(), ext)
+		if len(shortName) == 0 {
+			return fmt.Errorf("failed to trim suffix %s for file %s", ext, file.Name())
+		}
+		if shortName != buildEnvName {
 			continue
 		}
 
@@ -141,19 +144,9 @@ func LoadRules(filesDir string) error {
 			return fmt.Errorf("error in rules file %s: %w", file.Name(), err)
 		}
 
-		shortName := strings.TrimSuffix(file.Name(), ext)
-		if len(shortName) == 0 {
-			return fmt.Errorf("failed to trim suffix %s for file %s", ext, file.Name())
-		}
-
-		RulesMap[shortName] = rules
-		ruleNames = append(ruleNames, shortName)
+		Rule = rules
+		return nil
 	}
 
-	if len(RulesMap) > 0 {
-		log.Infof("Loaded %d rules from %s: [%s]\n", len(RulesMap), filesDir, strings.Join(ruleNames, ", "))
-	} else {
-		log.Warningf("No rules found in %s\n", filesDir)
-	}
-	return nil
+	return fmt.Errorf("couldn't find necessary rule in the rules dir (it should be named '%s.json')", buildEnvName)
 }

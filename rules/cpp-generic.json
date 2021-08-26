@@ -20,8 +20,8 @@
             "name": "run",
             "command":"/tmp/out/prog",
             "limits": {
-                "address_space_mb": 80,
-                "run_time_sec": 20.0,
+                "address_space_mb": 300,
+                "run_time_sec": 12.0,
                 "file_descriptors": 256,
                 "file_writes_mb": 16,
                 "threads": 1000,
