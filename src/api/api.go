@@ -11,6 +11,8 @@ type ClientMessage struct {
 	SourceFiles []SourceFile `json:"source_files"`
 	Command     string       `json:"command"`
 	RequestID   string       `json:"request_id"`
+	// name of a target stage, ex: "run_tests"
+	Target string `json:"target"`
 }
 
 // Backend -> Client
