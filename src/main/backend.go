@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/practicode-org/worker/src/api"
+	"github.com/practicode-org/worker/src/rules"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/gorilla/websocket"
@@ -101,20 +103,45 @@ func handleBackendConnection(conn *websocket.Conn) {
 			continue
 		}
 
+		log.Debugf("Got new request: %s\n", string(bytes))
+
 		if msg.Command != "new" {
 			log.Errorf("Got wrong first request message: %s...", trimLongString(string(bytes), 64))
 			continue
 		}
+		// TODO: add accept message
+
 		if msg.RequestID == "" {
-			log.Errorf("Got empty request_id as first message from the backend: %s...", trimLongString(string(bytes), 64))
+			str := fmt.Sprintf("Got empty 'request_id' in the first message: %s...", trimLongString(string(bytes), 64))
+			log.Error(str)
+			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
+			continue
+		}
+		if msg.Target == "" {
+			str := fmt.Sprintf("Got empty 'target' in the first message: %s...", trimLongString(string(bytes), 64))
+			log.Error(str)
+			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
 			continue
 		}
 		if msg.SourceFiles != nil {
-			log.Errorf("Got unexpected source_files content in the first message from the backend")
+			str := "Got unexpected source_files content in the first message from the backend"
+			log.Error(str)
+			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
+			continue
+		}
+		stages, err := rules.StagesForTarget(msg.Target)
+		if err != nil {
+			str := fmt.Sprintf("Failed to figure out rules for target %s: %v", msg.Target, err)
+			log.Error(str)
+			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
 			continue
 		}
 
-		handleRequest(msg.RequestID, recvMessages, sendMessages)
+		handleRequest(msg.RequestID, stages, recvMessages, sendMessages)
 	}
 
 	log.Debugf("Start cleanup at handleBackendConnection")

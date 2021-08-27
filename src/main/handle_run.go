@@ -133,7 +133,7 @@ func wrapToJail(command string, env []string, mounts []string, limits *rules.Lim
 	return nsjailCmd, strings.Split(nsjailCmd, " ")
 }
 
-func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, stage rules.Stage, sourceFiles []string, requestID string) bool {
+func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, stage *rules.Stage, sourceFiles []string, requestID string) bool {
 	startTime := time.Now()
 
 	jailedCommand, jailedArgs := wrapToJail(stage.Command, stage.Env, stage.Mounts, stage.Limits, sourceFiles)
@@ -284,7 +284,9 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 	handleWsConnection(c, "no-request-id") // TODO: fix
 }*/
 
-func handleRequest(requestID string, recvMessages <-chan []byte, sendMessages chan<- interface{}) {
+func handleRequest(requestID string, stages []*rules.Stage, recvMessages <-chan []byte, sendMessages chan<- interface{}) {
+	log.Debugf("handleRequest started with %d stages for request %s\n", len(stages), requestID)
+
 	// read source code
 	sourceFiles, err := receiveSourceCode(recvMessages)
 	if err != nil {
@@ -293,8 +295,8 @@ func handleRequest(requestID string, recvMessages <-chan []byte, sendMessages ch
 	}
 
 	// run stages
-	for i := 0; i < len(rules.Rule.Stages); i++ {
-		success := runCommand(sendMessages, recvMessages, rules.Rule.Stages[i], sourceFiles, requestID)
+	for i := 0; i < len(stages); i++ {
+		success := runCommand(sendMessages, recvMessages, stages[i], sourceFiles, requestID)
 		if !success {
 			break
 		}
