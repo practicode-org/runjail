@@ -1,0 +1,10 @@
+stages:
+  - name: run
+    command: "/usr/bin/python3 {sources}"
+    limits:
+        address_space_mb: 120
+        run_time_sec: 20.0
+        file_descriptors: 256
+        file_writes_mb: 16
+        threads: 1000
+        output_bytes: 8198

@@ -43,7 +43,7 @@ func main() {
 		log.Fatalf("Fatal: build-env is empty")
 	}
 
-	err = rules.LoadRules(*rulesDirFlag, *buildEnvNameFlag)
+	err = rules.LoadBuildStages(*rulesDirFlag, *buildEnvNameFlag)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}

@@ -1,0 +1,45 @@
+stages:
+  - name: compile
+    command: "/usr/bin/clang++ -x c++ -lpthread -std=c++17 -o /tmp/out/prog {sources}"
+    mounts":
+      - "/tmp/"
+      - "/tmp/out"
+    limits:
+        address_space_mb: 400
+        run_time_sec: 8.0
+        file_descriptors: 256
+        file_writes_mb: 16
+        threads: 1600
+        output_bytes: 1000000
+  - name: run
+    depends_on: compile
+    command: "/tmp/out/prog"
+    limits:
+        address_space_mb: 300
+        run_time_sec: 10.0
+        file_descriptors: 256
+        file_writes_mb: 16
+        threads: 1000
+        output_bytes: 8198
+  - name: compile_tests
+    command: "/usr/bin/clang++ -x c++ -lpthread -std=c++17 -o /tmp/out/prog {sources}"
+    mounts:
+      - "/tmp/"
+      - "/tmp/out"
+    limits:
+        address_space_mb: 400
+        run_time_sec: 8.0
+        file_descriptors: 256
+        file_writes_mb: 16
+        threads: 1600
+        output_bytes: 1000000
+  - name: run_tests
+    depends_on: compile_tests
+    command: "/tmp/out/prog"
+    limits:
+        address_space_mb: 400
+        run_time_sec: 10.0
+        file_descriptors: 256
+        file_writes_mb: 20
+        threads: 1600
+        output_bytes: 100198
