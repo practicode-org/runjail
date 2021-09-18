@@ -33,7 +33,7 @@ func messageRecvLoop(conn *websocket.Conn, messages chan<- []byte, exitSignal in
 			break
 		}
 
-		log.Debug("<- received: ", trimLongString(string(data), 64))
+		log.Debug("<- received: ", trimLongString(string(data), 194))
 
 		messages <- data
 	}
@@ -114,21 +114,21 @@ func handleBackendConnection(conn *websocket.Conn) {
 		if msg.RequestID == "" {
 			str := fmt.Sprintf("Got empty 'request_id' in the first message: %s...", trimLongString(string(bytes), 64))
 			log.Error(str)
-			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Error{Desc: str, Stage: "init", RequestID: msg.RequestID}
 			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
 			continue
 		}
 		if msg.Target == "" {
 			str := fmt.Sprintf("Got empty 'target' in the first message: %s...", trimLongString(string(bytes), 64))
 			log.Error(str)
-			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Error{Desc: str, Stage: "init", RequestID: msg.RequestID}
 			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
 			continue
 		}
 		if msg.SourceFiles != nil {
 			str := "Got unexpected source_files content in the first message from the backend"
 			log.Error(str)
-			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Error{Desc: str, Stage: "init", RequestID: msg.RequestID}
 			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
 			continue
 		}
@@ -136,12 +136,12 @@ func handleBackendConnection(conn *websocket.Conn) {
 		if err != nil {
 			str := fmt.Sprintf("Failed to figure out rules for target %s: %v", msg.Target, err)
 			log.Error(str)
-			sendMessages <- api.Error{Code: GenericError, Desc: str, Stage: "init", RequestID: msg.RequestID}
+			sendMessages <- api.Error{Desc: str, Stage: "init", RequestID: msg.RequestID}
 			sendMessages <- api.Finish{Finish: true, RequestID: msg.RequestID}
 			continue
 		}
 
-		handleRequest(msg.RequestID, stages, recvMessages, sendMessages)
+		handleRequest(msg.RequestID, msg.Target, stages, recvMessages, sendMessages)
 	}
 
 	log.Debugf("Start cleanup at handleBackendConnection")

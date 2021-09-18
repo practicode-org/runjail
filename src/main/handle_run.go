@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -22,66 +23,79 @@ import (
 	"github.com/practicode-org/worker/src/api"
 	"github.com/practicode-org/worker/src/config"
 	"github.com/practicode-org/worker/src/rules"
+	"github.com/practicode-org/worker/src/tests"
 )
 
 var wsUpgrader = websocket.Upgrader{}
 
 type CloseEvent struct{}
 
-const (
-	GenericError = iota + 1
-	SourceCodeError
-)
+func receiveTestSuite(recvMessages <-chan []byte) (api.TestSuite, error) {
+	bytes := <-recvMessages
 
-func receiveSourceCode(recvMessages <-chan []byte) ([]string, error) {
+	msg := api.TestSuite{}
+	err := json.Unmarshal(bytes, &msg)
+	if err != nil {
+		return msg, fmt.Errorf("failed to unmarshal test cases message: %w, text: %s", err, trimLongString(string(bytes), 64))
+	}
+	if (msg.TestCases == nil || len(msg.TestCases) == 0) && (msg.InitTestCases == nil || len(msg.InitTestCases) == 0) {
+		return msg, errors.New("no test cases when it's expected")
+	}
+	return msg, nil
+}
+
+// returns []fileNames, []sourceTexts, error
+func receiveSourceCode(recvMessages <-chan []byte) ([]string, []string, error) {
 	bytes := <-recvMessages
 
 	msg := api.ClientMessage{}
 	err := json.Unmarshal(bytes, &msg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal message: %w, text: %s", err, trimLongString(string(bytes), 64))
+		return nil, nil, fmt.Errorf("failed to unmarshal source code message: %w, text: %s", err, trimLongString(string(bytes), 64))
 	}
 	if msg.SourceFiles == nil || len(msg.SourceFiles) == 0 {
-		return nil, errors.New("no source code when it's expected")
+		return nil, nil, errors.New("no source code when it's expected")
 	}
 
 	var totalSize uint64
+	sourceTexts := make([]string, 0)
 
 	for i, sf := range msg.SourceFiles {
 		// check file name
 		if len(sf.Name) == 0 || len(sf.Name) > 64 {
-			return nil, fmt.Errorf("source file name is too long")
+			return nil, nil, fmt.Errorf("source file name is too long")
 		}
 		if sf.Name[0] == '.' || sf.Name[len(sf.Name)-1] == '.' {
-			return nil, fmt.Errorf("wrong source file name %q", sf.Name)
+			return nil, nil, fmt.Errorf("wrong source file name %q", sf.Name)
 		}
 		if len(sf.Hash) != md5.Size*2 {
-			return nil, fmt.Errorf("wrong hash length (%d), must be %d for hex MD5", len(sf.Hash), md5.Size*2)
+			return nil, nil, fmt.Errorf("wrong hash length (%d), must be %d for hex MD5", len(sf.Hash), md5.Size*2)
 		}
 		if idx := strings.IndexFunc(sf.Name, func(r rune) bool {
 			return !unicode.IsDigit(r) && !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && r != '_' && r != '.'
 		}); idx != -1 {
-			return nil, fmt.Errorf("forbidden character in the source file name at index %d", idx)
+			return nil, nil, fmt.Errorf("forbidden character in the source file name at index %d", idx)
 		}
 
 		// decode
 		decodedSources, err := base64.StdEncoding.DecodeString(sf.Text)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode base64: %w", err)
+			return nil, nil, fmt.Errorf("failed to decode base64: %w", err)
 		}
 		msg.SourceFiles[i].Text = string(decodedSources)
 		totalSize += uint64(len(decodedSources))
+		sourceTexts = append(sourceTexts, msg.SourceFiles[i].Text)
 
 		// check size limit
 		if totalSize > config.Cfg.SourcesSizeLimitBytes {
-			return nil, fmt.Errorf("reached source code size limit: %d", config.Cfg.SourcesSizeLimitBytes)
+			return nil, nil, fmt.Errorf("reached source code size limit: %d", config.Cfg.SourcesSizeLimitBytes)
 		}
 
 		// check hash
 		computedHash := fmt.Sprintf("%x", md5.Sum(decodedSources))
 		for j := 0; j < md5.Size*2; j++ {
 			if computedHash[j] != sf.Hash[j] {
-				return nil, fmt.Errorf("hash for %q doesn't match the source code", sf.Name)
+				return nil, nil, fmt.Errorf("hash for %q doesn't match the source code", sf.Name)
 			}
 		}
 	}
@@ -93,12 +107,12 @@ func receiveSourceCode(recvMessages <-chan []byte) ([]string, error) {
 
 		err := ioutil.WriteFile(filePath, []byte(sf.Text), 0660) // rw-/rw-/---
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		fileNames = append(fileNames, filePath)
 	}
 
-	return fileNames, nil
+	return fileNames, sourceTexts, nil
 }
 
 func KillProcess(proc *os.Process) error {
@@ -133,23 +147,27 @@ func wrapToJail(command string, env []string, mounts []string, limits *rules.Lim
 	return nsjailCmd, strings.Split(nsjailCmd, " ")
 }
 
-func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, stage *rules.Stage, sourceFiles []string, requestID string) bool {
+func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, stage *rules.Stage, testCase *api.TestCase, testCaseIdx int, sourceFiles []string, requestID string) bool {
 	startTime := time.Now()
 
 	jailedCommand, jailedArgs := wrapToJail(stage.Command, stage.Env, stage.Mounts, stage.Limits, sourceFiles)
 
-	log.Infof("Running stage '%s' command: %s\n", stage.Name, jailedCommand)
+	if testCase == nil {
+		log.Infof("Running stage '%s' command: %s", stage.Name, jailedCommand)
+	} else {
+		log.Infof("Running stage '%s' command: %s, test case #%d", stage.Name, jailedCommand, testCaseIdx)
+	}
 
 	cmd := exec.Command(jailedArgs[0], jailedArgs[1:]...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stdout pipe: %v", err), Stage: stage.Name, RequestID: requestID}
+		sendMessages <- api.Error{Desc: fmt.Sprintf("Failed to get program's stdout pipe: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to get program's stderr pipe: %v", err), Stage: stage.Name, RequestID: requestID}
+		sendMessages <- api.Error{Desc: fmt.Sprintf("Failed to get program's stderr pipe: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 
@@ -160,7 +178,7 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 			buf := make([]byte, 512)
 			n, err := readFrom.Read(buf)
 			if err != nil && err != io.EOF {
-				sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Error while reading stdout: %v", err), Stage: stage.Name, RequestID: requestID}
+				sendMessages <- api.Error{Desc: fmt.Sprintf("Error while reading stdout: %v", err), Stage: stage.Name, RequestID: requestID}
 				break
 			}
 			if n == 0 && err == io.EOF {
@@ -189,11 +207,15 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 
 	err = cmd.Start()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to run program process: %v", err), Stage: stage.Name, RequestID: requestID}
+		sendMessages <- api.Error{Desc: fmt.Sprintf("Failed to run program process: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 
-	sendMessages <- api.StageEvent{Event: "started", Stage: stage.Name, RequestID: requestID}
+	evt := api.StageEvent{Event: "started", Stage: stage.Name, RequestID: requestID}
+	if testCase != nil {
+		evt.TestCase = strconv.Itoa(testCaseIdx)
+	}
+	sendMessages <- evt
 	log.Debugf("Started process pid %d", cmd.Process.Pid)
 
 	// listen to commands from the client
@@ -235,7 +257,7 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 	//
 	procState, err := cmd.Process.Wait()
 	if err != nil {
-		sendMessages <- api.Error{Code: GenericError, Desc: fmt.Sprintf("Failed to wait program process: %v", err), Stage: stage.Name, RequestID: requestID}
+		sendMessages <- api.Error{Desc: fmt.Sprintf("Failed to wait program process: %v", err), Stage: stage.Name, RequestID: requestID}
 		return false
 	}
 
@@ -248,9 +270,35 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 		log.Infof("Process exit code: %d, stage duration: %.2f sec, output: %d bytes", exitCode, duration.Seconds(), outputTransferred)
 	}
 
+	// time for test checks
+	passedTests := true
+	if testCase != nil {
+		for i := 0; i < len(testCase.Checks); i++ {
+			checkDesc := testCase.Checks[i]
+			var err error
+			passedTests, err = tests.CheckExitCode(checkDesc, exitCode)
+			if err != nil {
+				sendMessages <- api.Error{Desc: err.Error(), Stage: stage.Name, RequestID: requestID}
+				passedTests = false
+			}
+			if !passedTests {
+				log.Debugf("Failed test case %d, check %d", testCaseIdx, i)
+				break
+			}
+		}
+		sendMessages <- api.TestResult{TestCase: strconv.Itoa(testCaseIdx), Result: passedTests, Stage: stage.Name, RequestID: requestID}
+		if passedTests {
+			log.Debugf("Passed test case %d, all checks", testCaseIdx)
+		}
+	}
+
 	sendMessages <- api.ExitCode{ExitCode: exitCode, Stage: stage.Name, RequestID: requestID}
 	sendMessages <- api.Duration{DurationSec: duration.Seconds(), Stage: stage.Name, RequestID: requestID}
 	sendMessages <- api.StageEvent{Event: "completed", Stage: stage.Name, RequestID: requestID}
+
+	if testCase != nil {
+		return passedTests
+	}
 
 	return exitCode == 0
 }
@@ -262,12 +310,12 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 
 	requestBuildEnv := query.Get("build_env")
 	if requestBuildEnv == "" {
-		log.Errorf("Error: got a request without build_env\n")
+		log.Errorf("Error: got a request without build_env")
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	if buildEnv != requestBuildEnv {
-		log.Errorf("Error: got a request with build_env %s, but %s is loaded\n", buildEnv, requestBuildEnv)
+		log.Errorf("Error: got a request with build_env %s, but %s is loaded", buildEnv, requestBuildEnv)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -275,7 +323,7 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
 	c, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Errorf("Failed to upgrade to Websocket: %v\n", err)
+		log.Errorf("Failed to upgrade to Websocket: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -284,22 +332,88 @@ func runCommand(sendMessages chan<- interface{}, clientCommands <-chan []byte, s
 	handleWsConnection(c, "no-request-id") // TODO: fix
 }*/
 
-func handleRequest(requestID string, stages []*rules.Stage, recvMessages <-chan []byte, sendMessages chan<- interface{}) {
-	log.Debugf("handleRequest started with %d stages for request %s\n", len(stages), requestID)
+func handleRequest(requestID string, target string, stages []*rules.Stage, recvMessages <-chan []byte, sendMessages chan<- interface{}) {
+	log.Debugf("handleRequest started with %d stages for request %s", len(stages), requestID)
 
-	// read source code
-	sourceFiles, err := receiveSourceCode(recvMessages)
+	defer func() {
+		sendMessages <- api.Finish{Finish: true, RequestID: requestID}
+	}()
+
+	// receive test cases (if needed)
+	hasTests := strings.Contains(target, "tests")
+	var testSuite api.TestSuite
+	if hasTests {
+		var err error
+		testSuite, err = receiveTestSuite(recvMessages)
+		if err != nil {
+			sendMessages <- api.Error{Desc: fmt.Sprintf("Failed to receive test cases: %v", err), Stage: "init", RequestID: requestID}
+			return
+		}
+		log.Debugf("Test suite received")
+	}
+
+	// receive source code
+	sourceFiles, sourceTexts, err := receiveSourceCode(recvMessages)
 	if err != nil {
-		sendMessages <- api.Error{Code: SourceCodeError, Desc: fmt.Sprintf("Failed to read source code: %v", err), Stage: "init", RequestID: requestID}
+		sendMessages <- api.Error{Desc: fmt.Sprintf("Failed to receive source code: %v", err), Stage: "init", RequestID: requestID}
+		return
+	}
+
+	// init tests
+	passInitTests := true
+	if hasTests {
+		for i := 0; i < len(testSuite.InitTestCases); i++ {
+			testCase := testSuite.InitTestCases[i]
+			for j := 0; j < len(testCase.Checks); j++ {
+				var err error
+				passInitTests, err = tests.CheckSourceCode(testCase.Checks[j], sourceTexts)
+				if err != nil {
+					sendMessages <- api.Error{Desc: err.Error(), Stage: "init", RequestID: requestID}
+					passInitTests = false
+				}
+				if !passInitTests {
+					log.Debugf("Failed init test case %d, check %d", i, j)
+					break
+				}
+			}
+
+			sendMessages <- api.TestResult{TestCase: strconv.Itoa(i), Result: passInitTests, Stage: "init", RequestID: requestID}
+			if !passInitTests {
+				break
+			}
+		}
+		if passInitTests {
+			log.Debugf("Passed init test cases")
+		}
+	}
+	sourceTexts = nil
+	if !passInitTests {
 		return
 	}
 
 	// run stages
 	for i := 0; i < len(stages); i++ {
-		success := runCommand(sendMessages, recvMessages, stages[i], sourceFiles, requestID)
-		if !success {
-			break
+		if !hasTests {
+			success := runCommand(sendMessages, recvMessages, stages[i], nil, -1, sourceFiles, requestID)
+			if !success {
+				break
+			}
+		} else {
+			if i < len(stages)-1 {
+				success := runCommand(sendMessages, recvMessages, stages[i], nil, -1, sourceFiles, requestID)
+				if !success {
+					break
+				}
+			} else {
+				for j := 0; j < len(testSuite.TestCases); j++ {
+					success := runCommand(sendMessages, recvMessages, stages[i], &testSuite.TestCases[j], j, sourceFiles, requestID)
+					if !success {
+						break
+					}
+				}
+			}
+
 		}
 	}
-	sendMessages <- api.Finish{Finish: true, RequestID: requestID}
+	// finish message will be sent in a deferred call
 }
