@@ -15,6 +15,24 @@ type ClientMessage struct {
 	Target string `json:"target"`
 }
 
+type TestCheck struct {
+	Type string `json:"type"`
+	Arg  string `json:"arg"`
+}
+
+type TestCase struct {
+	Description string `json:"description"`
+	//Explanation string `json:"explanation"`
+	//StealResultsFrom int `json:"steal_results_from"`
+	//Stdin string `json:"stdin"`
+	Checks []TestCheck `json:"checks"`
+}
+
+type TestSuite struct {
+	InitTestCases []TestCase `json:"init_test_cases"`
+	TestCases     []TestCase `json:"test_cases"`
+}
+
 // Backend -> Client
 
 // Possible events:
@@ -23,6 +41,7 @@ type ClientMessage struct {
 type StageEvent struct {
 	Event     string `json:"event"`
 	Stage     string `json:"stage"`
+	TestCase  string `json:"test_case,omitempty"` // index of a test case being run (if applied)
 	RequestID string `json:"request_id"`
 }
 
@@ -45,8 +64,14 @@ type Output struct {
 	RequestID string `json:"request_id"`
 }
 
+type TestResult struct {
+	TestCase  string `json:"test_case"` // index of a test case being run (if applied)
+	Result    bool   `json:"result"`
+	Stage     string `json:"stage"`
+	RequestID string `json:"request_id"`
+}
+
 type Error struct {
-	Code      int    `json:"error"`
 	Desc      string `json:"description"`
 	Stage     string `json:"stage"`
 	RequestID string `json:"request_id"`
